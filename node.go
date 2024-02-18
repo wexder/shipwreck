@@ -23,29 +23,25 @@ type (
 		Granted bool
 	}
 	VoteRequest struct {
-		Term        int64
-		CommitIndex int64
+		Term         int64
+		CommitOffset int64
 	}
 	LogRequest[T any] struct {
-		CommitIndex int64
-		StartOffset int64
-		Entries     []T
-	}
-	LogEntry[T any] struct {
-		Index int64
-		Entry T
+		CommitOffset int64
+		StartOffset  int64
+		Entries      []T
 	}
 	LogReply struct {
-		CommitIndex int64
-		Success     bool
+		CommitOffset int64
+		Success      bool
 	}
 )
 
 type conn[T any] interface {
 	// This might not be neccessary
 	ID() string
-	requestVote(ctx context.Context, vote Message[VoteRequest]) (Message[VoteReply], error)
-	syncLog(ctx context.Context, log Message[LogRequest[T]]) (Message[LogReply], error)
+	RequestVote(ctx context.Context, vote Message[VoteRequest]) (Message[VoteReply], error)
+	SyncLog(ctx context.Context, log Message[LogRequest[T]]) (Message[LogReply], error)
 }
 
 type NodeMode int64
@@ -112,6 +108,7 @@ func NewNode[T any](id string, storage Storage[T], commitCallback commitCallback
 // Main function for pushing new values to the log
 func (n *Node[T]) Push(v T) error {
 	if n.mode == NodeModeFollower {
+		// TODO msg proxy
 		// leader, ok := n.peers[n.currentLeader]
 		// if !ok {
 		// 	return fmt.Errorf("Leader not found")
@@ -165,12 +162,14 @@ func (n *Node[T]) Restart() {
 	n.resetTimer()
 }
 
-func (n *Node[T]) Start() {
+func (n *Node[T]) Start(ctx context.Context) error {
 	n.stopped = false
 	n.resetTimer()
 
 	for {
 		select {
+		case <-ctx.Done():
+			return ctx.Err()
 		case <-n.electionTimeout.C:
 			// resets
 			if n.mode == NodeModeFollower {
@@ -246,13 +245,13 @@ func (n *Node[T]) syncPeers() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			resp, err := peer.conn.syncLog(ctx, Message[LogRequest[T]]{
+			resp, err := peer.conn.SyncLog(ctx, Message[LogRequest[T]]{
 				SourceID: n.id,
 				TargetID: peer.conn.ID(),
 				Msg: LogRequest[T]{
-					CommitIndex: n.commitOffset,
-					StartOffset: peer.commitOffset,
-					Entries:     n.getUncommitedLogs(peer),
+					CommitOffset: n.commitOffset,
+					StartOffset:  peer.commitOffset,
+					Entries:      n.getUncommitedLogs(peer),
 				},
 			})
 			// TODO better error handling, add backoff
@@ -273,7 +272,7 @@ func (n *Node[T]) syncPeers() {
 			successes += 1
 		} else {
 			p := n.peers[result.SourceID]
-			p.commitOffset = result.Msg.CommitIndex
+			p.commitOffset = result.Msg.CommitOffset
 			n.peers[result.SourceID] = p
 		}
 	}
@@ -327,12 +326,12 @@ func (n *Node[T]) candidateRequestPeerVotes() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			reply, err := peer.conn.requestVote(ctx, Message[VoteRequest]{
+			reply, err := peer.conn.RequestVote(ctx, Message[VoteRequest]{
 				SourceID: n.id,
 				TargetID: peer.conn.ID(),
 				Msg: VoteRequest{
-					CommitIndex: n.commitOffset,
-					Term:        n.term,
+					CommitOffset: n.commitOffset,
+					Term:         n.term,
 				},
 			})
 			if err != nil {
@@ -352,7 +351,7 @@ func (n *Node[T]) candidateRequestPeerVotes() {
 }
 
 // requestVote implements conn.
-func (n *Node[T]) requestVote(ctx context.Context, vote Message[VoteRequest]) (Message[VoteReply], error) {
+func (n *Node[T]) RequestVote(ctx context.Context, vote Message[VoteRequest]) (Message[VoteReply], error) {
 	n.voteLock.Lock()
 	defer n.voteLock.Unlock()
 
@@ -374,7 +373,7 @@ func (n *Node[T]) requestVote(ctx context.Context, vote Message[VoteRequest]) (M
 		}, nil
 	}
 
-	if vote.Msg.CommitIndex < n.commitOffset {
+	if vote.Msg.CommitOffset < n.commitOffset {
 		return Message[VoteReply]{
 			SourceID: n.id,
 			TargetID: vote.SourceID,
@@ -409,7 +408,7 @@ func (n *Node[T]) requestVote(ctx context.Context, vote Message[VoteRequest]) (M
 }
 
 // ping implements conn.
-func (n *Node[T]) syncLog(ctx context.Context, log Message[LogRequest[T]]) (Message[LogReply], error) {
+func (n *Node[T]) SyncLog(ctx context.Context, log Message[LogRequest[T]]) (Message[LogReply], error) {
 	if n.stopped {
 		return Message[LogReply]{
 			SourceID: n.id,
@@ -440,8 +439,8 @@ func (n *Node[T]) syncLog(ctx context.Context, log Message[LogRequest[T]]) (Mess
 			SourceID: n.id,
 			TargetID: log.SourceID,
 			Msg: LogReply{
-				CommitIndex: n.commitOffset,
-				Success:     false,
+				CommitOffset: n.commitOffset,
+				Success:      false,
 			},
 		}, nil
 	}
@@ -455,7 +454,7 @@ func (n *Node[T]) syncLog(ctx context.Context, log Message[LogRequest[T]]) (Mess
 	n.syncOffset = log.Msg.StartOffset + int64(len(log.Msg.Entries))
 
 	// Commit
-	err = n.commitLogs(log.Msg.CommitIndex)
+	err = n.commitLogs(log.Msg.CommitOffset)
 	if err != nil {
 		// TODO handle
 		// return nil, err
@@ -465,8 +464,8 @@ func (n *Node[T]) syncLog(ctx context.Context, log Message[LogRequest[T]]) (Mess
 		SourceID: n.id,
 		TargetID: log.SourceID,
 		Msg: LogReply{
-			CommitIndex: n.commitOffset,
-			Success:     true,
+			CommitOffset: n.commitOffset,
+			Success:      true,
 		},
 	}, nil
 }

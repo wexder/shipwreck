@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package shipwreck;
+
+service Node {
+  rpc RequestVote(VoteRequest) returns (VoteReply) {}
+  rpc SyncLog(LogRequest) returns (LogReply) {}
+}
+
+message VoteRequest {
+  string source_id  = 1;
+  string targe_id = 2;
+  int64 term     = 3;
+  int64 commit_offset =4;
+}
+
+message VoteReply {
+  string source_id  = 1;
+  string targe_id = 2;
+  bool granted     = 3;
+}
+
+message LogRequest {
+  string source_id  = 1;
+  string targe_id = 2;
+  int64 commit_offset = 3;
+  int64 start_offset = 4;
+  bytes entries = 5;
+}
+
+message LogReply {
+  string source_id  = 1;
+  string targe_id = 2;
+  int64 commit_offset = 3;
+  bool success = 4;
+}

@@ -23,11 +23,13 @@
             # This is your devenv configuration
             packages = with pkgs; [
               pkgs.buf
+              pkgs.protobuf
               pkgs.protoc-gen-go
               pkgs.go-protobuf
 
               pkgs.tilt
               pkgs.go
+              pkgs.gopls
               pkgs.gotests
               pkgs.gosec
               pkgs.govulncheck
