@@ -8,6 +8,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 type msg any
@@ -26,7 +28,7 @@ type (
 		Term         int64
 		CommitOffset int64
 	}
-	LogRequest[T any] struct {
+	LogRequest[T nodeMessage] struct {
 		CommitOffset int64
 		StartOffset  int64
 		Entries      []T
@@ -37,11 +39,10 @@ type (
 	}
 )
 
-type conn[T any] interface {
-	// This might not be neccessary
+type conn[T nodeMessage] interface {
 	ID() string
 	RequestVote(ctx context.Context, vote Message[VoteRequest]) (Message[VoteReply], error)
-	SyncLog(ctx context.Context, log Message[LogRequest[T]]) (Message[LogReply], error)
+	AppendEntries(ctx context.Context, log Message[LogRequest[T]]) (Message[LogReply], error)
 }
 
 type NodeMode int64
@@ -52,24 +53,32 @@ const (
 	NodeModeLeader
 )
 
-type peer[T any] struct {
+type peer[T nodeMessage] struct {
 	commitOffset int64
 	conn         conn[T]
 }
 
-type commitCallbackFunc[T any] func(logs []T) error
+type commitCallbackFunc[T nodeMessage] func(ctx context.Context, logs []T) error
 
-type Node[T any] struct {
-	// Node[T any] data
+type syncStatus struct {
+	offset int64
+	err    error
+}
+
+type node[T nodeMessage] struct {
+	// node[T encoding.BinaryMarshaler] data
 	id           string // TODO maybe change
 	mode         NodeMode
 	peers        map[string]peer[T]
 	stopped      bool
+	stopping     bool
 	commitOffset int64
 	syncOffset   int64
 	storage      Storage[T]
 
 	commitCallback commitCallbackFunc[T]
+	syncChLock     sync.Mutex
+	syncCh         []chan syncStatus
 
 	// Voting
 	electionTimeout *time.Ticker
@@ -82,19 +91,35 @@ type Node[T any] struct {
 	syncTicker *time.Ticker
 }
 
+type RaftNode[T nodeMessage] interface {
+	ID() string
+	Mode() NodeMode
+	Push(v T) error
+	AddPeer(conn conn[T])
+	Start(ctx context.Context) error
+	Stop(ctx context.Context) error
+
+	conn[T]
+}
+
+type nodeMessage any // should be something more concreate
+
 // TODO handle commitCallback
-func NewNode[T any](id string, storage Storage[T], commitCallback commitCallbackFunc[T]) *Node[T] {
+func NewNode[T nodeMessage](storage Storage[T], commitCallback commitCallbackFunc[T]) RaftNode[T] {
 	d := time.Duration(rand.Int63n(150)+150) * time.Millisecond
-	return &Node[T]{
-		id:           id,
+	return &node[T]{
+		id:           uuid.New().String(),
 		mode:         NodeModeFollower,
 		stopped:      true,
+		stopping:     true,
 		peers:        map[string]peer[T]{},
 		commitOffset: 0,
 		syncOffset:   0,
 
 		storage:        storage,
 		commitCallback: commitCallback,
+		syncChLock:     sync.Mutex{},
+		syncCh:         []chan syncStatus{},
 
 		electionTimeout: time.NewTicker(d),
 		votedFor:        "",
@@ -106,72 +131,114 @@ func NewNode[T any](id string, storage Storage[T], commitCallback commitCallback
 }
 
 // Main function for pushing new values to the log
-func (n *Node[T]) Push(v T) error {
-	if n.mode == NodeModeFollower {
-		// TODO msg proxy
-		// leader, ok := n.peers[n.currentLeader]
-		// if !ok {
-		// 	return fmt.Errorf("Leader not found")
-		// }
-
-		// leader.conn.Push()
-		return nil
+func (n *node[T]) Push(v T) error {
+	if n.stopped {
+		return fmt.Errorf("Node is not running")
 	}
 
-	err := n.storage.Append(v)
+	if n.stopping {
+		return fmt.Errorf("Node is being stopped")
+	}
+
+	// TODO proxy
+	if n.mode != NodeModeLeader {
+		return fmt.Errorf("node is not leader")
+	}
+
+	offset, err := n.storage.Append(v)
 	if err != nil {
 		return err
 	}
-	return nil
+
+	// This will be problematic as channels can block for infinite time
+	c := make(chan syncStatus)
+	n.syncChLock.Lock()
+	n.syncCh = append(n.syncCh, c)
+	n.syncChLock.Unlock()
+
+	for status := range c {
+		if status.err != nil {
+			n.syncChLock.Lock()
+			n.syncCh = without(n.syncCh, c)
+			n.syncChLock.Unlock()
+			return status.err
+		}
+		if status.offset >= offset {
+			n.syncChLock.Lock()
+			n.syncCh = without(n.syncCh, c)
+			n.syncChLock.Unlock()
+			return nil
+		}
+	}
+
+	return fmt.Errorf("FUCK")
 }
 
-func (n *Node[T]) ID() string {
+func without[T comparable](slice []T, s T) []T {
+	result := []T{}
+	for _, v := range slice {
+		if s != v {
+			result = append(result, v)
+		}
+	}
+	return result
+}
+
+func (n *node[T]) ID() string {
 	return n.id
 }
 
-func (n *Node[T]) Mode() NodeMode {
+func (n *node[T]) Mode() NodeMode {
 	return n.mode
 }
 
-func (n *Node[T]) String() string {
-	return fmt.Sprintf("%v (%v, %v) %+v", n.mode, n.commitOffset, n.syncOffset, n.storage.Commited())
-}
-
-func (n *Node[T]) AddPeer(conn conn[T]) {
+func (n *node[T]) AddPeer(conn conn[T]) {
 	n.peers[conn.ID()] = peer[T]{
 		conn:         conn,
 		commitOffset: n.commitOffset,
 	}
 }
 
-func (n *Node[T]) Stop() {
+func (n *node[T]) Stop(ctx context.Context) error {
+	// Signal stopping, this will stop accepting push
+	n.stopping = true
+
+	// If leader, we want to wait for next sync tick
+	if n.mode == NodeModeLeader {
+		<-n.syncTicker.C
+	}
+
 	n.stopped = true
 	n.electionTimeout.Stop()
 	n.syncTicker.Stop()
+
+	return nil
 }
 
-func (n *Node[T]) resetTimer() {
+const syncTickerDuration = 50 * time.Millisecond
+
+func (n *node[T]) resetTimer() {
 	d := time.Duration(rand.Int63n(150)+150) * time.Millisecond
 	n.electionTimeout.Reset(d)
-	n.syncTicker.Reset(50 * time.Millisecond)
+	n.syncTicker.Reset(syncTickerDuration)
 }
 
-func (n *Node[T]) Restart() {
+func (n *node[T]) restart() {
 	n.mode = NodeModeFollower
+	n.stopping = false
 	n.stopped = false
 	n.resetTimer()
 }
 
-func (n *Node[T]) Start(ctx context.Context) error {
-	n.stopped = false
-	n.resetTimer()
+func (n *node[T]) Start(ctx context.Context) error {
+	n.restart()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-n.electionTimeout.C:
-			// resets
+			// No heartbeat recieved, switch to candidate
 			if n.mode == NodeModeFollower {
 				n.becomeCandidate()
 			}
@@ -180,40 +247,40 @@ func (n *Node[T]) Start(ctx context.Context) error {
 				n.syncPeers()
 			}
 			if n.mode == NodeModeCandidate {
-				n.candidateRequestPeerVotes()
+				n.startNewTerm()
 			}
 		}
 	}
 }
 
-func (n *Node[T]) becomeLeader() {
+func (n *node[T]) becomeLeader() {
 	if n.mode == NodeModeLeader {
 		return
 	}
-	slog.Debug("Node become leader", "ID", n.id)
+	slog.Debug("node become leader", "ID", n.id)
 	n.mode = NodeModeLeader
 
 	n.syncPeers()
 }
 
-func (n *Node[T]) becomeFollower() {
+func (n *node[T]) becomeFollower() {
 	if n.mode == NodeModeFollower {
 		return
 	}
-	slog.Debug("Node become follower", "ID", n.id)
+	slog.Debug("node become follower", "ID", n.id)
 	n.mode = NodeModeFollower
 }
 
-func (n *Node[T]) becomeCandidate() {
+func (n *node[T]) becomeCandidate() {
 	if n.mode == NodeModeCandidate {
 		return
 	}
-	slog.Debug("Node become candidate", "ID", n.id)
+	slog.Debug("node become candidate", "ID", n.id)
 	n.mode = NodeModeCandidate
 	n.resetTimer()
 }
 
-func (n *Node[T]) commitLogs(offset int64) error {
+func (n *node[T]) commitLogs(offset int64) error {
 	commited, err := n.storage.Commit(offset)
 	if err != nil {
 		return err
@@ -222,16 +289,31 @@ func (n *Node[T]) commitLogs(offset int64) error {
 		return nil
 	}
 
-	err = n.commitCallback(commited)
+	n.commitOffset = offset
+
+	ctx, cancel := context.WithTimeout(context.Background(), syncTickerDuration/2) // really tight timing
+	defer cancel()
+
+	err = n.commitCallback(ctx, commited) //  Can block the goroutine infinitly, should be guarded from such behaviour, or panic when that happen
 	if err != nil {
 		return err
 	}
 
-	n.commitOffset = offset
+	if n.mode == NodeModeLeader {
+		n.syncChLock.Lock()
+		for _, c := range n.syncCh {
+			c <- syncStatus{
+				offset: offset,
+				err:    nil,
+			}
+		}
+		n.syncChLock.Unlock()
+	}
+
 	return nil
 }
 
-func (n *Node[T]) syncPeers() {
+func (n *node[T]) syncPeers() {
 	if n.stopped {
 		return
 	}
@@ -245,7 +327,7 @@ func (n *Node[T]) syncPeers() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			resp, err := peer.conn.SyncLog(ctx, Message[LogRequest[T]]{
+			resp, err := peer.conn.AppendEntries(ctx, Message[LogRequest[T]]{
 				SourceID: n.id,
 				TargetID: peer.conn.ID(),
 				Msg: LogRequest[T]{
@@ -277,7 +359,7 @@ func (n *Node[T]) syncPeers() {
 		}
 	}
 
-	canCommit := successes > int64(1+len(n.peers)/2)
+	canCommit := successes >= int64(1+len(n.peers)/2)
 	if canCommit {
 		err := n.commitLogs(n.syncOffset)
 		if err != nil {
@@ -289,17 +371,25 @@ func (n *Node[T]) syncPeers() {
 			p.commitOffset = n.syncOffset
 			n.peers[id] = p
 		}
-		// TODO handle callback
 	} else {
 		err := n.storage.Discard(n.commitOffset, n.syncOffset)
 		if err != nil {
 			// TODO handle
 			// return nil, err
 		}
+
+		n.syncChLock.Lock()
+		for _, c := range n.syncCh {
+			c <- syncStatus{
+				offset: 0,
+				err:    fmt.Errorf("Operation failed to sync"),
+			}
+		}
+		n.syncChLock.Unlock()
 	}
 }
 
-func (n *Node[T]) getUncommitedLogs(p peer[T]) []T {
+func (n *node[T]) getUncommitedLogs(p peer[T]) []T {
 	values, err := n.storage.Get(min(n.storage.Length(), p.commitOffset), n.storage.Length())
 	if err != nil {
 		// TODO handle
@@ -308,7 +398,7 @@ func (n *Node[T]) getUncommitedLogs(p peer[T]) []T {
 	return values
 }
 
-func (n *Node[T]) candidateRequestPeerVotes() {
+func (n *node[T]) startNewTerm() {
 	if n.stopped {
 		return
 	}
@@ -318,7 +408,7 @@ func (n *Node[T]) candidateRequestPeerVotes() {
 	ctx := context.Background()
 
 	granted := atomic.Int64{}
-	granted.Add(1) // Node voted for itself so we can just add one here
+	granted.Add(1) // node voted for itself so we can just add one here
 
 	wg := sync.WaitGroup{}
 	for _, peer := range n.peers {
@@ -344,14 +434,14 @@ func (n *Node[T]) candidateRequestPeerVotes() {
 	}
 	wg.Wait()
 
-	hasMajorityVote := granted.Load() > int64(1+len(n.peers)/2)
+	hasMajorityVote := granted.Load() >= int64(1+len(n.peers)/2)
 	if hasMajorityVote {
 		n.becomeLeader()
 	}
 }
 
 // requestVote implements conn.
-func (n *Node[T]) RequestVote(ctx context.Context, vote Message[VoteRequest]) (Message[VoteReply], error) {
+func (n *node[T]) RequestVote(ctx context.Context, vote Message[VoteRequest]) (Message[VoteReply], error) {
 	n.voteLock.Lock()
 	defer n.voteLock.Unlock()
 
@@ -359,7 +449,7 @@ func (n *Node[T]) RequestVote(ctx context.Context, vote Message[VoteRequest]) (M
 		return Message[VoteReply]{
 			SourceID: n.id,
 			TargetID: vote.SourceID,
-		}, fmt.Errorf("Node unreachable")
+		}, fmt.Errorf("node unreachable")
 	}
 
 	n.resetTimer()
@@ -408,12 +498,12 @@ func (n *Node[T]) RequestVote(ctx context.Context, vote Message[VoteRequest]) (M
 }
 
 // ping implements conn.
-func (n *Node[T]) SyncLog(ctx context.Context, log Message[LogRequest[T]]) (Message[LogReply], error) {
+func (n *node[T]) AppendEntries(ctx context.Context, log Message[LogRequest[T]]) (Message[LogReply], error) {
 	if n.stopped {
 		return Message[LogReply]{
 			SourceID: n.id,
 			TargetID: log.SourceID,
-		}, fmt.Errorf("Node unreachable")
+		}, fmt.Errorf("node unreachable")
 	}
 
 	// Cleanup
@@ -446,7 +536,7 @@ func (n *Node[T]) SyncLog(ctx context.Context, log Message[LogRequest[T]]) (Mess
 	}
 
 	// Write new logs
-	err := n.storage.Append(log.Msg.Entries...)
+	_, err := n.storage.Append(log.Msg.Entries...)
 	if err != nil {
 		// TODO handle
 		// return nil, err
@@ -470,4 +560,4 @@ func (n *Node[T]) SyncLog(ctx context.Context, log Message[LogRequest[T]]) (Mess
 	}, nil
 }
 
-var _ conn[any] = (*Node[any])(nil)
+var _ conn[nodeMessage] = (*node[nodeMessage])(nil)

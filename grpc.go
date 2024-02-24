@@ -15,8 +15,8 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-type GrpcNodeServer[T any] struct {
-	n    *Node[T]
+type GrpcNodeServer[T nodeMessage] struct {
+	n    RaftNode[T]
 	port int64
 
 	proto.UnsafeNodeServer
@@ -43,15 +43,15 @@ func (gns *GrpcNodeServer[T]) RequestVote(ctx context.Context, req *proto.VoteRe
 	}, nil
 }
 
-// SyncLog implements proto.NodeServer.
-func (gns *GrpcNodeServer[T]) SyncLog(ctx context.Context, req *proto.LogRequest) (*proto.LogReply, error) {
+// AppendEntries implements proto.NodeServer.
+func (gns *GrpcNodeServer[T]) AppendEntries(ctx context.Context, req *proto.LogRequest) (*proto.LogReply, error) {
 	entries := []T{}
 	err := gob.NewDecoder(bytes.NewBuffer(req.Entries)).Decode(&entries)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "Entries decoding failed: %v", err.Error())
 	}
 
-	sync, err := gns.n.SyncLog(ctx, Message[LogRequest[T]]{
+	sync, err := gns.n.AppendEntries(ctx, Message[LogRequest[T]]{
 		SourceID: req.SourceId,
 		TargetID: req.TargeId,
 		Msg: LogRequest[T]{
@@ -72,7 +72,7 @@ func (gns *GrpcNodeServer[T]) SyncLog(ctx context.Context, req *proto.LogRequest
 	}, nil
 }
 
-func NewGrpcNodeServer[T any](n *Node[T], port int64) *GrpcNodeServer[T] {
+func NewGrpcNodeServer[T nodeMessage](n RaftNode[T], port int64) *GrpcNodeServer[T] {
 	return &GrpcNodeServer[T]{
 		n:    n,
 		port: port,
@@ -102,32 +102,32 @@ func (gns *GrpcNodeServer[T]) Start(ctx context.Context) error {
 	return grpcServer.Serve(lis)
 }
 
-type GrpcConn[T any] struct {
+type grpcConn[T nodeMessage] struct {
 	client proto.NodeClient
 	id     string
 }
 
-func NewGrpcConn[T any](addr string, nodeID string) (*GrpcConn[T], error) {
+func NewGrpcConn[T nodeMessage](addr string) (conn[T], error) {
 	conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return nil, err
 	}
 	client := proto.NewNodeClient(conn)
-	return &GrpcConn[T]{
+	return &grpcConn[T]{
 		client: client,
-		id:     nodeID,
+		id:     addr,
 	}, nil
 }
 
-var _ conn[any] = (*GrpcConn[any])(nil)
+var _ conn[nodeMessage] = (*grpcConn[nodeMessage])(nil)
 
 // ID implements conn.
-func (gc *GrpcConn[T]) ID() string {
+func (gc *grpcConn[T]) ID() string {
 	return gc.id
 }
 
 // RequestVote implements conn.
-func (gc *GrpcConn[T]) RequestVote(ctx context.Context, vote Message[VoteRequest]) (Message[VoteReply], error) {
+func (gc *grpcConn[T]) RequestVote(ctx context.Context, vote Message[VoteRequest]) (Message[VoteReply], error) {
 	reply, err := gc.client.RequestVote(ctx, &proto.VoteRequest{
 		SourceId:     vote.SourceID,
 		TargeId:      vote.TargetID,
@@ -147,15 +147,15 @@ func (gc *GrpcConn[T]) RequestVote(ctx context.Context, vote Message[VoteRequest
 	}, nil
 }
 
-// SyncLog implements conn.
-func (gc *GrpcConn[T]) SyncLog(ctx context.Context, log Message[LogRequest[T]]) (Message[LogReply], error) {
+// AppendEntries implements conn.
+func (gc *grpcConn[T]) AppendEntries(ctx context.Context, log Message[LogRequest[T]]) (Message[LogReply], error) {
 	entries := bytes.NewBuffer([]byte{})
 	err := gob.NewEncoder(entries).Encode(log.Msg.Entries)
 	if err != nil {
 		return Message[LogReply]{}, err
 	}
 
-	reply, err := gc.client.SyncLog(ctx, &proto.LogRequest{
+	reply, err := gc.client.AppendEntries(ctx, &proto.LogRequest{
 		SourceId:     log.SourceID,
 		TargeId:      log.TargetID,
 		CommitOffset: log.Msg.CommitOffset,

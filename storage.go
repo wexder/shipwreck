@@ -3,7 +3,7 @@ package shipwreck
 import "sync"
 
 type Storage[T any] interface {
-	Append(command ...T) error
+	Append(command ...T) (int64, error)
 	Get(start int64, end int64) ([]T, error)
 	// Commits the logs to the offset and returns the commited logs
 	Commit(offset int64) ([]T, error)
@@ -21,13 +21,13 @@ type MemoryStorage[T any] struct {
 	commited []T
 }
 
-func (ms *MemoryStorage[T]) Append(command ...T) error {
+func (ms *MemoryStorage[T]) Append(command ...T) (int64, error) {
 	ms.logsLock.Lock()
 	defer ms.logsLock.Unlock()
 
 	ms.logs = append(ms.logs, command...)
 
-	return nil
+	return int64(len(ms.logs)), nil
 }
 
 func (ms *MemoryStorage[T]) Commit(offset int64) ([]T, error) {

@@ -19,8 +19,8 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
-	Node_RequestVote_FullMethodName = "/shipwreck.Node/RequestVote"
-	Node_SyncLog_FullMethodName     = "/shipwreck.Node/SyncLog"
+	Node_RequestVote_FullMethodName   = "/shipwreck.Node/RequestVote"
+	Node_AppendEntries_FullMethodName = "/shipwreck.Node/AppendEntries"
 )
 
 // NodeClient is the client API for Node service.
@@ -28,7 +28,7 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type NodeClient interface {
 	RequestVote(ctx context.Context, in *VoteRequest, opts ...grpc.CallOption) (*VoteReply, error)
-	SyncLog(ctx context.Context, in *LogRequest, opts ...grpc.CallOption) (*LogReply, error)
+	AppendEntries(ctx context.Context, in *LogRequest, opts ...grpc.CallOption) (*LogReply, error)
 }
 
 type nodeClient struct {
@@ -48,9 +48,9 @@ func (c *nodeClient) RequestVote(ctx context.Context, in *VoteRequest, opts ...g
 	return out, nil
 }
 
-func (c *nodeClient) SyncLog(ctx context.Context, in *LogRequest, opts ...grpc.CallOption) (*LogReply, error) {
+func (c *nodeClient) AppendEntries(ctx context.Context, in *LogRequest, opts ...grpc.CallOption) (*LogReply, error) {
 	out := new(LogReply)
-	err := c.cc.Invoke(ctx, Node_SyncLog_FullMethodName, in, out, opts...)
+	err := c.cc.Invoke(ctx, Node_AppendEntries_FullMethodName, in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -62,7 +62,7 @@ func (c *nodeClient) SyncLog(ctx context.Context, in *LogRequest, opts ...grpc.C
 // for forward compatibility
 type NodeServer interface {
 	RequestVote(context.Context, *VoteRequest) (*VoteReply, error)
-	SyncLog(context.Context, *LogRequest) (*LogReply, error)
+	AppendEntries(context.Context, *LogRequest) (*LogReply, error)
 	mustEmbedUnimplementedNodeServer()
 }
 
@@ -73,8 +73,8 @@ type UnimplementedNodeServer struct {
 func (UnimplementedNodeServer) RequestVote(context.Context, *VoteRequest) (*VoteReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RequestVote not implemented")
 }
-func (UnimplementedNodeServer) SyncLog(context.Context, *LogRequest) (*LogReply, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method SyncLog not implemented")
+func (UnimplementedNodeServer) AppendEntries(context.Context, *LogRequest) (*LogReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method AppendEntries not implemented")
 }
 func (UnimplementedNodeServer) mustEmbedUnimplementedNodeServer() {}
 
@@ -107,20 +107,20 @@ func _Node_RequestVote_Handler(srv interface{}, ctx context.Context, dec func(in
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Node_SyncLog_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+func _Node_AppendEntries_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(LogRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(NodeServer).SyncLog(ctx, in)
+		return srv.(NodeServer).AppendEntries(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: Node_SyncLog_FullMethodName,
+		FullMethod: Node_AppendEntries_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(NodeServer).SyncLog(ctx, req.(*LogRequest))
+		return srv.(NodeServer).AppendEntries(ctx, req.(*LogRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -137,8 +137,8 @@ var Node_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Node_RequestVote_Handler,
 		},
 		{
-			MethodName: "SyncLog",
-			Handler:    _Node_SyncLog_Handler,
+			MethodName: "AppendEntries",
+			Handler:    _Node_AppendEntries_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

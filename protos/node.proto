@@ -4,7 +4,7 @@ package shipwreck;
 
 service Node {
   rpc RequestVote(VoteRequest) returns (VoteReply) {}
-  rpc SyncLog(LogRequest) returns (LogReply) {}
+  rpc AppendEntries(LogRequest) returns (LogReply) {}
 }
 
 message VoteRequest {
