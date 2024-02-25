@@ -37,12 +37,19 @@ type (
 		CommitOffset int64
 		Success      bool
 	}
+	ProxyPush[T nodeMessage] struct {
+		Value T
+	}
+	ProxyPushReply struct {
+		Ok bool
+	}
 )
 
 type conn[T nodeMessage] interface {
 	ID() string
 	RequestVote(ctx context.Context, vote Message[VoteRequest]) (Message[VoteReply], error)
 	AppendEntries(ctx context.Context, log Message[LogRequest[T]]) (Message[LogReply], error)
+	ProxyPush(ctx context.Context, log Message[ProxyPush[T]]) (Message[ProxyPushReply], error)
 }
 
 type NodeMode int64
@@ -142,7 +149,19 @@ func (n *node[T]) Push(v T) error {
 
 	// TODO proxy
 	if n.mode != NodeModeLeader {
-		return fmt.Errorf("node is not leader")
+		leader, ok := n.peers[n.currentLeader]
+		if !ok {
+			return fmt.Errorf("No leader available")
+		}
+		_, err := leader.conn.ProxyPush(context.Background(), Message[ProxyPush[T]]{
+			SourceID: n.id,
+			TargetID: leader.conn.ID(),
+			Msg: ProxyPush[T]{
+				Value: v,
+			},
+		})
+
+		return err
 	}
 
 	offset, err := n.storage.Append(v)
@@ -438,6 +457,28 @@ func (n *node[T]) startNewTerm() {
 	if hasMajorityVote {
 		n.becomeLeader()
 	}
+}
+
+// proxyPush implements conn.
+func (n *node[T]) ProxyPush(ctx context.Context, value Message[ProxyPush[T]]) (Message[ProxyPushReply], error) {
+	err := n.Push(value.Msg.Value)
+	if err != nil {
+		return Message[ProxyPushReply]{
+			SourceID: n.id,
+			TargetID: value.SourceID,
+			Msg: ProxyPushReply{
+				Ok: false,
+			},
+		}, err
+	}
+
+	return Message[ProxyPushReply]{
+		SourceID: n.id,
+		TargetID: value.SourceID,
+		Msg: ProxyPushReply{
+			Ok: true,
+		},
+	}, nil
 }
 
 // requestVote implements conn.

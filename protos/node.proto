@@ -5,23 +5,24 @@ package shipwreck;
 service Node {
   rpc RequestVote(VoteRequest) returns (VoteReply) {}
   rpc AppendEntries(LogRequest) returns (LogReply) {}
+  rpc ProxyPush(ProxyPushRequest) returns (ProxyPushReply) {}
 }
 
 message VoteRequest {
-  string source_id  = 1;
+  string source_id = 1;
   string targe_id = 2;
-  int64 term     = 3;
-  int64 commit_offset =4;
+  int64 term = 3;
+  int64 commit_offset = 4;
 }
 
 message VoteReply {
-  string source_id  = 1;
+  string source_id = 1;
   string targe_id = 2;
-  bool granted     = 3;
+  bool granted = 3;
 }
 
 message LogRequest {
-  string source_id  = 1;
+  string source_id = 1;
   string targe_id = 2;
   int64 commit_offset = 3;
   int64 start_offset = 4;
@@ -29,8 +30,20 @@ message LogRequest {
 }
 
 message LogReply {
-  string source_id  = 1;
+  string source_id = 1;
   string targe_id = 2;
   int64 commit_offset = 3;
   bool success = 4;
+}
+
+message ProxyPushRequest {
+  string source_id = 1;
+  string targe_id = 2;
+  bytes push = 3;
+}
+
+message ProxyPushReply {
+  string source_id = 1;
+  string targe_id = 2;
+  bool ok = 3;
 }

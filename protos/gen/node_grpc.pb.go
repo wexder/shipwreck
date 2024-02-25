@@ -21,6 +21,7 @@ const _ = grpc.SupportPackageIsVersion7
 const (
 	Node_RequestVote_FullMethodName   = "/shipwreck.Node/RequestVote"
 	Node_AppendEntries_FullMethodName = "/shipwreck.Node/AppendEntries"
+	Node_ProxyPush_FullMethodName     = "/shipwreck.Node/ProxyPush"
 )
 
 // NodeClient is the client API for Node service.
@@ -29,6 +30,7 @@ const (
 type NodeClient interface {
 	RequestVote(ctx context.Context, in *VoteRequest, opts ...grpc.CallOption) (*VoteReply, error)
 	AppendEntries(ctx context.Context, in *LogRequest, opts ...grpc.CallOption) (*LogReply, error)
+	ProxyPush(ctx context.Context, in *ProxyPushRequest, opts ...grpc.CallOption) (*ProxyPushReply, error)
 }
 
 type nodeClient struct {
@@ -57,12 +59,22 @@ func (c *nodeClient) AppendEntries(ctx context.Context, in *LogRequest, opts ...
 	return out, nil
 }
 
+func (c *nodeClient) ProxyPush(ctx context.Context, in *ProxyPushRequest, opts ...grpc.CallOption) (*ProxyPushReply, error) {
+	out := new(ProxyPushReply)
+	err := c.cc.Invoke(ctx, Node_ProxyPush_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // NodeServer is the server API for Node service.
 // All implementations must embed UnimplementedNodeServer
 // for forward compatibility
 type NodeServer interface {
 	RequestVote(context.Context, *VoteRequest) (*VoteReply, error)
 	AppendEntries(context.Context, *LogRequest) (*LogReply, error)
+	ProxyPush(context.Context, *ProxyPushRequest) (*ProxyPushReply, error)
 	mustEmbedUnimplementedNodeServer()
 }
 
@@ -75,6 +87,9 @@ func (UnimplementedNodeServer) RequestVote(context.Context, *VoteRequest) (*Vote
 }
 func (UnimplementedNodeServer) AppendEntries(context.Context, *LogRequest) (*LogReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AppendEntries not implemented")
+}
+func (UnimplementedNodeServer) ProxyPush(context.Context, *ProxyPushRequest) (*ProxyPushReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method ProxyPush not implemented")
 }
 func (UnimplementedNodeServer) mustEmbedUnimplementedNodeServer() {}
 
@@ -125,6 +140,24 @@ func _Node_AppendEntries_Handler(srv interface{}, ctx context.Context, dec func(
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Node_ProxyPush_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ProxyPushRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeServer).ProxyPush(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Node_ProxyPush_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeServer).ProxyPush(ctx, req.(*ProxyPushRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Node_ServiceDesc is the grpc.ServiceDesc for Node service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -139,6 +172,10 @@ var Node_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "AppendEntries",
 			Handler:    _Node_AppendEntries_Handler,
+		},
+		{
+			MethodName: "ProxyPush",
+			Handler:    _Node_ProxyPush_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

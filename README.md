@@ -5,7 +5,7 @@ You can read more about this [here](https://neurobug.com/posts/raft/).
 ## TODO
 - [x] gRPC Communication
 - [ ] Error handling
-- [ ] Follower request proxy
+- [x] Follower request proxy
 - [ ] File based storage
 - [ ] Unit tests
 - [ ] Integration tests
