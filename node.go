@@ -155,7 +155,7 @@ func (n *node[T]) Push(v T) error {
 	if n.mode == NodeModeFollower {
 		leader, ok := n.peers[n.currentLeader]
 		if !ok {
-			return fmt.Errorf("No leader available")
+			return fmt.Errorf("No leader %v available", n.currentLeader)
 		}
 
 		_, err := leader.conn.ProxyPush(context.Background(), Message[ProxyPush[T]]{
