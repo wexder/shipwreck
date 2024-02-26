@@ -189,18 +189,24 @@ func (gc *grpcConn[T]) ProxyPush(ctx context.Context, value Message[ProxyPush[T]
 // RequestVote implements conn.
 func (gc *grpcConn[T]) RequestVote(ctx context.Context, vote Message[VoteRequest]) (Message[VoteReply], error) {
 	reply, err := gc.client.RequestVote(ctx, &proto.VoteRequest{
-		SourceId:     vote.SourceID,
-		TargeId:      vote.TargetID,
+		SourceId:     gc.id,
+		TargeId:      vote.SourceID,
 		Term:         vote.Msg.Term,
 		CommitOffset: vote.Msg.CommitOffset,
 	})
 	if err != nil {
-		return Message[VoteReply]{}, err
+		return Message[VoteReply]{
+			SourceID: gc.id,
+			TargetID: vote.SourceID,
+			Msg: VoteReply{
+				Granted: false,
+			},
+		}, err
 	}
 
 	return Message[VoteReply]{
-		SourceID: reply.SourceId,
-		TargetID: reply.TargeId,
+		SourceID: gc.id,
+		TargetID: vote.SourceID,
 		Msg: VoteReply{
 			Granted: reply.Granted,
 		},
@@ -212,7 +218,14 @@ func (gc *grpcConn[T]) AppendEntries(ctx context.Context, log Message[LogRequest
 	entries := bytes.NewBuffer([]byte{})
 	err := gob.NewEncoder(entries).Encode(log.Msg.Entries)
 	if err != nil {
-		return Message[LogReply]{}, err
+		return Message[LogReply]{
+			SourceID: gc.id,
+			TargetID: log.SourceID,
+			Msg: LogReply{
+				CommitOffset: 0,
+				Success:      false,
+			},
+		}, err
 	}
 
 	reply, err := gc.client.AppendEntries(ctx, &proto.LogRequest{
@@ -223,12 +236,19 @@ func (gc *grpcConn[T]) AppendEntries(ctx context.Context, log Message[LogRequest
 		Entries:      entries.Bytes(),
 	})
 	if err != nil {
-		return Message[LogReply]{}, err
+		return Message[LogReply]{
+			SourceID: gc.id,
+			TargetID: log.SourceID,
+			Msg: LogReply{
+				CommitOffset: 0,
+				Success:      false,
+			},
+		}, err
 	}
 
 	return Message[LogReply]{
-		SourceID: reply.SourceId,
-		TargetID: reply.TargeId,
+		SourceID: gc.id,
+		TargetID: reply.SourceId,
 		Msg: LogReply{
 			CommitOffset: reply.CommitOffset,
 			Success:      reply.Success,

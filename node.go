@@ -100,6 +100,7 @@ type node[T nodeMessage] struct {
 
 type RaftNode[T nodeMessage] interface {
 	ID() string
+	String() string
 	Mode() NodeMode
 	Push(v T) error
 	AddPeer(conn conn[T])
@@ -147,12 +148,16 @@ func (n *node[T]) Push(v T) error {
 		return fmt.Errorf("Node is being stopped")
 	}
 
-	// TODO proxy
-	if n.mode != NodeModeLeader {
+	if n.currentLeader == "" {
+		return fmt.Errorf("Cluster is not ready")
+	}
+
+	if n.mode == NodeModeFollower {
 		leader, ok := n.peers[n.currentLeader]
 		if !ok {
 			return fmt.Errorf("No leader available")
 		}
+
 		_, err := leader.conn.ProxyPush(context.Background(), Message[ProxyPush[T]]{
 			SourceID: n.id,
 			TargetID: leader.conn.ID(),
@@ -171,26 +176,27 @@ func (n *node[T]) Push(v T) error {
 
 	// This will be problematic as channels can block for infinite time
 	c := make(chan syncStatus)
+	defer func() {
+		n.syncChLock.Lock()
+		n.syncCh = without(n.syncCh, c)
+		n.syncChLock.Unlock()
+		close(c)
+	}()
+
 	n.syncChLock.Lock()
 	n.syncCh = append(n.syncCh, c)
 	n.syncChLock.Unlock()
 
 	for status := range c {
 		if status.err != nil {
-			n.syncChLock.Lock()
-			n.syncCh = without(n.syncCh, c)
-			n.syncChLock.Unlock()
 			return status.err
 		}
 		if status.offset >= offset {
-			n.syncChLock.Lock()
-			n.syncCh = without(n.syncCh, c)
-			n.syncChLock.Unlock()
 			return nil
 		}
 	}
 
-	return fmt.Errorf("FUCK")
+	return fmt.Errorf("Failed to commit")
 }
 
 func without[T comparable](slice []T, s T) []T {
@@ -205,6 +211,10 @@ func without[T comparable](slice []T, s T) []T {
 
 func (n *node[T]) ID() string {
 	return n.id
+}
+
+func (n *node[T]) String() string {
+	return fmt.Sprintf("Debug %v %v %v %v %v", n.id, n.commitOffset, n.storage.Length(), n.storage.Commited(), len(n.syncCh))
 }
 
 func (n *node[T]) Mode() NodeMode {
@@ -278,6 +288,7 @@ func (n *node[T]) becomeLeader() {
 	}
 	slog.Debug("node become leader", "ID", n.id)
 	n.mode = NodeModeLeader
+	n.currentLeader = n.id
 
 	n.syncPeers()
 }
