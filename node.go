@@ -76,6 +76,7 @@ type node[T nodeMessage] struct {
 	// node[T encoding.BinaryMarshaler] data
 	id           string // TODO maybe change
 	mode         NodeMode
+	peersList    []conn[T]
 	peers        map[string]peer[T]
 	stopped      bool
 	stopping     bool
@@ -121,6 +122,7 @@ func NewNode[T nodeMessage](storage Storage[T], commitCallback commitCallbackFun
 		stopped:      true,
 		stopping:     true,
 		peers:        map[string]peer[T]{},
+		peersList:    []conn[T]{},
 		commitOffset: 0,
 		syncOffset:   0,
 
@@ -222,10 +224,7 @@ func (n *node[T]) Mode() NodeMode {
 }
 
 func (n *node[T]) AddPeer(conn conn[T]) {
-	n.peers[conn.ID()] = peer[T]{
-		conn:         conn,
-		commitOffset: n.commitOffset,
-	}
+	n.peersList = append(n.peersList, conn)
 }
 
 func (n *node[T]) Stop(ctx context.Context) error {
@@ -260,6 +259,30 @@ func (n *node[T]) restart() {
 }
 
 func (n *node[T]) Start(ctx context.Context) error {
+	// Very poor peer discovery
+	attempt := 0
+	for {
+		if attempt == 10 {
+			return fmt.Errorf("Failed to get all peers metadata")
+		}
+
+		for _, p := range n.peersList {
+			id := p.ID()
+			if id == "" {
+				attempt += 1
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
+
+			n.peers[id] = peer[T]{
+				commitOffset: 0,
+				conn:         p,
+			}
+		}
+
+		break
+	}
+
 	n.restart()
 
 	for {

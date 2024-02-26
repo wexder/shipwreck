@@ -22,6 +22,13 @@ type GrpcNodeServer[T nodeMessage] struct {
 	proto.UnsafeNodeServer
 }
 
+// GetMetadata implements proto.NodeServer.
+func (gns *GrpcNodeServer[T]) GetMetadata(context.Context, *proto.MetadataRequest) (*proto.MetadataReply, error) {
+	return &proto.MetadataReply{
+		Id: gns.n.ID(),
+	}, nil
+}
+
 // ProxyPush implements proto.NodeServer.
 func (gns *GrpcNodeServer[T]) ProxyPush(ctx context.Context, req *proto.ProxyPushRequest) (*proto.ProxyPushReply, error) {
 	var value T
@@ -148,6 +155,13 @@ var _ conn[nodeMessage] = (*grpcConn[nodeMessage])(nil)
 
 // ID implements conn.
 func (gc *grpcConn[T]) ID() string {
+	if gc.id == "" {
+		reply, err := gc.client.GetMetadata(context.Background(), &proto.MetadataRequest{})
+		if err != nil {
+			return ""
+		}
+		gc.id = reply.Id
+	}
 	return gc.id
 }
 

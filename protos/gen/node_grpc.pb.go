@@ -19,6 +19,7 @@ import (
 const _ = grpc.SupportPackageIsVersion7
 
 const (
+	Node_GetMetadata_FullMethodName   = "/shipwreck.Node/GetMetadata"
 	Node_RequestVote_FullMethodName   = "/shipwreck.Node/RequestVote"
 	Node_AppendEntries_FullMethodName = "/shipwreck.Node/AppendEntries"
 	Node_ProxyPush_FullMethodName     = "/shipwreck.Node/ProxyPush"
@@ -28,6 +29,7 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type NodeClient interface {
+	GetMetadata(ctx context.Context, in *MetadataRequest, opts ...grpc.CallOption) (*MetadataReply, error)
 	RequestVote(ctx context.Context, in *VoteRequest, opts ...grpc.CallOption) (*VoteReply, error)
 	AppendEntries(ctx context.Context, in *LogRequest, opts ...grpc.CallOption) (*LogReply, error)
 	ProxyPush(ctx context.Context, in *ProxyPushRequest, opts ...grpc.CallOption) (*ProxyPushReply, error)
@@ -39,6 +41,15 @@ type nodeClient struct {
 
 func NewNodeClient(cc grpc.ClientConnInterface) NodeClient {
 	return &nodeClient{cc}
+}
+
+func (c *nodeClient) GetMetadata(ctx context.Context, in *MetadataRequest, opts ...grpc.CallOption) (*MetadataReply, error) {
+	out := new(MetadataReply)
+	err := c.cc.Invoke(ctx, Node_GetMetadata_FullMethodName, in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *nodeClient) RequestVote(ctx context.Context, in *VoteRequest, opts ...grpc.CallOption) (*VoteReply, error) {
@@ -72,6 +83,7 @@ func (c *nodeClient) ProxyPush(ctx context.Context, in *ProxyPushRequest, opts .
 // All implementations must embed UnimplementedNodeServer
 // for forward compatibility
 type NodeServer interface {
+	GetMetadata(context.Context, *MetadataRequest) (*MetadataReply, error)
 	RequestVote(context.Context, *VoteRequest) (*VoteReply, error)
 	AppendEntries(context.Context, *LogRequest) (*LogReply, error)
 	ProxyPush(context.Context, *ProxyPushRequest) (*ProxyPushReply, error)
@@ -82,6 +94,9 @@ type NodeServer interface {
 type UnimplementedNodeServer struct {
 }
 
+func (UnimplementedNodeServer) GetMetadata(context.Context, *MetadataRequest) (*MetadataReply, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetMetadata not implemented")
+}
 func (UnimplementedNodeServer) RequestVote(context.Context, *VoteRequest) (*VoteReply, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RequestVote not implemented")
 }
@@ -102,6 +117,24 @@ type UnsafeNodeServer interface {
 
 func RegisterNodeServer(s grpc.ServiceRegistrar, srv NodeServer) {
 	s.RegisterService(&Node_ServiceDesc, srv)
+}
+
+func _Node_GetMetadata_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MetadataRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NodeServer).GetMetadata(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Node_GetMetadata_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NodeServer).GetMetadata(ctx, req.(*MetadataRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _Node_RequestVote_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -165,6 +198,10 @@ var Node_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "shipwreck.Node",
 	HandlerType: (*NodeServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "GetMetadata",
+			Handler:    _Node_GetMetadata_Handler,
+		},
 		{
 			MethodName: "RequestVote",
 			Handler:    _Node_RequestVote_Handler,
